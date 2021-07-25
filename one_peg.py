@@ -1,4 +1,5 @@
 from rich import print
+from tqdm import tqdm
 import json
 import os
 import random
@@ -113,6 +114,10 @@ class OnePegGame(HexGrid):
             return False
         if start_pos_num in self.get_adjacent_positions(end_pos_num):
             return False
+        sx, sy = self.positions[start_pos_num]
+        ex, ey = self.positions[end_pos_num]
+        if sx == ex:
+            return False
         return len(self._get_matching_pos(start_pos_num, end_pos_num)) == 1
 
     def move(self, start_pos_num: int, end_pos_num: int):
@@ -152,6 +157,7 @@ class LearningPegGame:
     def __init__(self, save_dir: str = "_memory", board_size: int = 5):
         self.save_dir = os.path.abspath(save_dir)
         os.makedirs(self.save_dir, exist_ok=True)
+        self.game_save_file = os.path.join(self.save_dir, "games.js")
 
         self.board_size = board_size
 
@@ -171,16 +177,23 @@ class LearningPegGame:
 
     def play_blind_games(self, count: int):
         """ Plays a number of blind games as a form of dumb data collection """
+        pbar = tqdm(total=count, desc="Playing Blind Games", ascii=True)
+
         best_game = (15, [])
-        for i in range(count):
+        game_list = []
+        i = 0
+        while i < count:
             game = self.play_blind_game()
             if game["score"] < best_game[0] or game["score"] == best_game[0] and len(game["moves"]) < len(best_game[1]):
                 best_game = (game["score"], game["moves"])
-            self.save_game(game)
-            print("Game", i, "Score", game["score"], "Final Config", game["moves"][-1])
-        print("Best Game\nScore", best_game[0], "Moves", len(best_game[1]), best_game[1])
+            game_list.append(game)
+            i += 1
+            pbar.update()
+        pbar.close()
+        print("Best Game: Score", best_game[0], "Moves", len(best_game[1]), "Final Config", best_game[1][-1])
+        self.save_games(game_list)
 
-    def play_smart_game(self):
+    def play_smart_game(self, desired_score: int = 1, board_size: int = 5, initial_board: str = "FTTTTTTTTTTTTTT"):
         """ Play a game where the computer uses collected data """
         pass
 
@@ -188,28 +201,43 @@ class LearningPegGame:
         """ Play a game where the computer tries to make new choices and discover new boards """
         pass
 
-    def save_game(self, game: dict):
-        game_save_file = os.path.join(self.save_dir, "games.js")
-        if not os.path.exists(game_save_file):
-            open(game_save_file, "w").write(json.dumps({}, indent=4))
+    def save_game(self, game: dict, check_duplicates: bool = False):
+        """ Saves a single game """
+        if not os.path.exists(self.game_save_file):
+            open(self.game_save_file, "w").write(json.dumps({}, indent=4))
 
         if all(key in game for key in ["score", "size", "initial", "moves"]):
-            game_dict = json.load(open(game_save_file, "r"))
+            game_dict = json.load(open(self.game_save_file, "r"))
             unique_key = str(game["size"]) + "-" + game["initial"]
-            game_history = {"score": game["score"], "moves": game["moves"]}
+            game["moves"] = "_".join(game["moves"])
+            game_history = (game["score"], game["moves"])
             if unique_key not in game_dict:
-                game_dict[unique_key] = {"games": [game_history]}
+                game_dict[unique_key] = [game_history]
+            elif check_duplicates:
+                old_moves = [old_game[1] for old_game in game_dict[unique_key]]
+                if game["moves"] not in old_moves:
+                    game_dict[unique_key].append(game_history)
             else:
-                game_dict[unique_key]["games"].append(game_history)
-            json.dump(game_dict, open(game_save_file, "w"), indent=4)
+                game_dict[unique_key].append(game_history)
+            json.dump(game_dict, open(self.game_save_file, "w"), indent=4)
 
-    def load_moves(self, str_move_list: list):
-        """ Converts the move list from a game into understandable data """
+    def save_games(self, game_list: list):
+        """ Saves multiple games and deletes duplicates """
+        move_list = set([])
+        for game in tqdm(game_list, desc="Saving Games", ascii=True):
+            moves = "-".join([m.split("-")[0] for m in game["moves"]])
+            if moves not in move_list:
+                move_list.add(moves)
+                self.save_game(game)
+
+    def load_moves(self, move_string: str):
+        """ Converts the move string from a game into understandable data """
         move_list = []
-        for move in str_move_list:
+        for move in move_string.split("_"):
             move_search = re.search(r"(?P<start_pos>\d*)>(?P<end_pos>\d*)-(?P<board>.*)", move,
                                     re.IGNORECASE)
-            move_list.append([(int(move_search.group("start_pos")), int(move_search.group("end_pos"))), [True if c.upper() == "T" else False for c in move_search.group("board")]])
+            move_list.append([(int(move_search.group("start_pos")), int(move_search.group("end_pos"))),
+                              [True if c.upper() == "T" else False for c in move_search.group("board")]])
         return move_list
 
 
@@ -217,8 +245,7 @@ if __name__ == "__main__":
     game = LearningPegGame()
     game.play_blind_games(100)
 
-# TODO: Create game bot which will take the legal moves determine the best one
-# TODO: Extrapolate game out x moves in advance
 # TODO: When a board position is seen in a sequence of winning moves enter that sequence
 # TODO: Define "win level" based on how many pegs are left, if a "winning sequence" results in more than 1 peg make it a percent change of being used
 # TODO: Create "move tree" that has a start position and shows every possible board using data collected in the games
+# TODO: Add pruning program to delete duplicates already saved
